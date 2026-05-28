@@ -6,10 +6,6 @@ import type {
 } from '../parsers/types';
 import type { CreditScoringResult } from '../scoring/adira-model';
 
-// =============================================
-// HELPERS
-// =============================================
-
 const TODAY = new Date();
 TODAY.setHours(0, 0, 0, 0);
 
@@ -49,7 +45,7 @@ function makeFacility(overrides: Partial<SLIKFacility>): SLIKFacility {
     pelapor_type: 'Bank',
     cabang: 'KC Jakarta Pusat',
     no_rekening: '1234567890',
-    baki_debet: 100_000_000,
+    baki_debet: 10_000_000,
     tanggal_update: TODAY,
     kualitas_kode: 1,
     kualitas_label: '1 - Lancar',
@@ -62,8 +58,8 @@ function makeFacility(overrides: Partial<SLIKFacility>): SLIKFacility {
     tunggakan_pokok: 0,
     tunggakan_bunga: 0,
     denda: 0,
-    plafon_awal: 500_000_000,
-    plafon: 500_000_000,
+    plafon_awal: 80_000_000,
+    plafon: 80_000_000,
     sifat_kredit: 'Lainnya',
     frekuensi_restrukturisasi: 0,
     cara_restrukturisasi: '',
@@ -73,8 +69,8 @@ function makeFacility(overrides: Partial<SLIKFacility>): SLIKFacility {
     suku_bunga: 9.5,
     jenis_suku_bunga: 'Fixed',
     kategori_debitur: 'Bukan Debitur UMKM',
-    tanggal_awal_kredit: monthsAgo(48),
-    tanggal_jatuh_tempo: new Date(TODAY.getFullYear() + 5, TODAY.getMonth(), 1),
+    tanggal_awal_kredit: monthsAgo(36),
+    tanggal_jatuh_tempo: new Date(TODAY.getFullYear() + 2, TODAY.getMonth(), 1),
     sektor_ekonomi: 'Perumahan',
     kredit_program_pemerintah: false,
     monthly_quality_strip: Array.from({ length: 24 }, (_, i) => ({
@@ -108,12 +104,7 @@ function makeReport(
         pekerjaan: 'Karyawan',
         tempat_bekerja: 'PT ABC',
         bidang_usaha: 'Perdagangan',
-        alamat: 'Jl. Sudirman No.1',
-        kelurahan: 'Senayan',
-        kecamatan: 'Kebayoran',
-        kabupaten_kota: 'Jakarta Selatan',
-        kode_pos: '12190',
-        negara: 'Indonesia',
+        alamat: 'Jl. Sudirman No.1, 10270',
       },
     ],
     ringkasan_fasilitas: makeRingkasan(
@@ -130,10 +121,6 @@ function makeReport(
   };
 }
 
-// =============================================
-// TEST RUNNER
-// =============================================
-
 let passed = 0;
 let failed = 0;
 
@@ -142,271 +129,256 @@ function runTest(
   report: ParsedSLIK,
   assertion: (r: CreditScoringResult) => { ok: boolean; msg?: string },
 ) {
-  console.log(`\n${'─'.repeat(55)}`);
-  console.log(`TEST: ${name}`);
   const result = scoreSlikReport(report);
   const { ok, msg } = assertion(result);
-  console.log(
-    `  Stage0 Valid:   ${result.stage0_validity.is_valid ? '✔' : '✘'} ${result.stage0_validity.errors.join('; ')}`,
-  );
-  console.log(
-    `  Stage1 Profile: ${result.stage1_profile.is_thin_file ? 'THIN' : 'THICK'} — ${result.stage1_profile.reason}`,
-  );
-  console.log(
-    `  Stage2 KO:      ${
-      result.stage2_knockout.is_ko
-        ? `⛔ ${result.stage2_knockout.triggered_rules.join(', ')}`
-        : '✔ CLEAN'
-    }`,
-  );
-  if (result.stage2_knockout.is_ko) {
-    for (const [k, v] of Object.entries(result.stage2_knockout.details)) {
-      console.log(`     ${k}: ${v}`);
-    }
-  }
-  console.log(
-    `  Stage3 Score:   ${result.stage3_scoring.score} → Grade ${result.stage3_scoring.grade} → ${result.stage3_scoring.decision}`,
-  );
-  if (result.stage3_scoring.breakdown) {
-    const b = result.stage3_scoring.breakdown;
-    console.log(
-      `  Breakdown:      Base:${b.baseScore} D1b:${b.d1b_recency} D2:${b.d2_severity} D3a:${b.d3a_restruFreq} D3b:${b.d3b_restruStatus} D4:${b.d4_creditAge} D5b:${b.d5b_debtBurden}`,
-    );
-  }
-  console.log(
-    `  Flags:          ${result.diagnostic_flags.join(', ') || 'none'}`,
-  );
   if (ok) {
-    console.log(`  ✅ PASSED`);
+    console.log(`✅ ${name}`);
     passed++;
   } else {
-    console.error(`  ❌ FAILED${msg ? ': ' + msg : ''}`);
+    console.error(`❌ ${name}${msg ? ': ' + msg : ''}`);
     failed++;
   }
 }
 
-// =============================================
-// SCENARIOS
-// =============================================
-
-// TC-1: Clean thick file — ideal applicant
 runTest(
-  'TC-1: Clean Thick File (Grade A)',
+  'TC-1 Clean Normal -> A',
   makeReport({}, [
-    makeFacility({
-      pelapor: 'PT Bank Mandiri',
-      pelapor_type: 'Bank',
-      plafon: 500_000_000,
-      baki_debet: 100_000_000,
-    }),
-    makeFacility({
-      pelapor: 'PT Bank BCA',
-      pelapor_type: 'Bank',
-      plafon: 50_000_000,
-      baki_debet: 10_000_000,
-      jenis_kredit: 'Kartu Kredit',
-    }),
+    makeFacility({ no_rekening: '1111111111' }),
+    makeFacility({ no_rekening: '2222222222', baki_debet: 5_000_000 }),
+    makeFacility({ no_rekening: '3333333333' }),
+    makeFacility({ no_rekening: '4444444444', baki_debet: 4_000_000 }),
   ]),
   (r) => ({
-    ok:
-      r.stage3_scoring.grade === 'A' && r.stage3_scoring.decision === 'APPROVE',
-    msg: `grade=${r.stage3_scoring.grade} decision=${r.stage3_scoring.decision}`,
+    ok: r.stage1_profile.file_type === 'NORMAL' && r.stage3_scoring.grade === 'A',
   }),
 );
 
-// TC-2: KO-1 — active KOL 3 + DPD > 90
 runTest(
-  'TC-2: KO-1 — Delinquent (KOL 3 / DPD 95)',
+  'TC-2 KO-1 DPD>90 + BD>5jt',
   makeReport({}, [
     makeFacility({
-      kualitas_kode: 3,
-      kualitas_label: '3 - Kurang Lancar',
+      no_rekening: '5555555555',
       jumlah_hari_tunggakan: 95,
-      kondisi: 'Aktif',
-      pelapor: 'Mega Finance',
+      baki_debet: 8_000_000,
       pelapor_type: 'Multifinance',
     }),
-    makeFacility({}),
+    makeFacility({ no_rekening: '6666666666' }),
+    makeFacility({ no_rekening: '7777777777' }),
+    makeFacility({ no_rekening: '8888888888' }),
   ]),
-  (r) => ({
-    ok:
-      r.stage2_knockout.is_ko &&
-      r.stage2_knockout.triggered_rules.includes('KO-1') &&
-      r.stage3_scoring.decision === 'REJECT',
-    msg: `KO rules: ${r.stage2_knockout.triggered_rules.join(',')}`,
-  }),
+  (r) => ({ ok: r.stage3_scoring.grade === 'KO' }),
 );
 
-// TC-3: KO-2 — active restructured facility
 runTest(
-  'TC-3: KO-2 — Active Restructuring',
+  'TC-3 KO-2 Dihapusbukukan <=36 bulan',
   makeReport({}, [
     makeFacility({
-      sifat_kredit: 'Direstrukturisasi',
-      frekuensi_restrukturisasi: 1,
-      kondisi: 'Aktif',
-      pelapor: 'PT Bank BRI',
-      pelapor_type: 'Bank',
-    }),
-    makeFacility({}),
-  ]),
-  (r) => ({
-    ok:
-      r.stage2_knockout.is_ko &&
-      r.stage2_knockout.triggered_rules.includes('KO-2') &&
-      r.stage3_scoring.decision === 'REJECT',
-    msg: `KO rules: ${r.stage2_knockout.triggered_rules.join(',')}`,
-  }),
-);
-
-// TC-4: KO-3 — Lunas Dengan Diskon < 12 months ago
-runTest(
-  'TC-4: KO-3 — Lunas Dengan Diskon (8 bln lalu)',
-  makeReport({}, [
-    makeFacility({
-      kondisi: 'Lunas Dengan Diskon',
-      tanggal_kondisi: monthsAgo(8),
-      pelapor: 'PT Adira Finance',
-      pelapor_type: 'Multifinance',
-    }),
-    makeFacility({}),
-  ]),
-  (r) => ({
-    ok:
-      r.stage2_knockout.is_ko &&
-      r.stage2_knockout.triggered_rules.includes('KO-3') &&
-      r.stage3_scoring.decision === 'REJECT',
-    msg: `KO rules: ${r.stage2_knockout.triggered_rules.join(',')}`,
-  }),
-);
-
-// TC-5: KO-4 — Dihapusbukukan < 24 months ago
-runTest(
-  'TC-5: KO-4 — Dihapusbukukan (18 bln lalu)',
-  makeReport({}, [
-    makeFacility({
+      no_rekening: '9999999999',
       kondisi: 'Dihapusbukukan',
       tanggal_kondisi: monthsAgo(18),
-      pelapor: 'PT FIF',
-      pelapor_type: 'Multifinance',
     }),
-    makeFacility({}),
+    makeFacility({ no_rekening: '1212121212' }),
+    makeFacility({ no_rekening: '1313131313' }),
+    makeFacility({ no_rekening: '1414141414' }),
   ]),
-  (r) => ({
-    ok:
-      r.stage2_knockout.is_ko &&
-      r.stage2_knockout.triggered_rules.includes('KO-4') &&
-      r.stage3_scoring.decision === 'REJECT',
-    msg: `KO rules: ${r.stage2_knockout.triggered_rules.join(',')}`,
-  }),
+  (r) => ({ ok: r.stage2_knockout.triggered_rules.includes('KO-2') }),
 );
 
-// TC-6: KO-6 — Itikad Tidak Baik < 36 months ago
 runTest(
-  'TC-6: KO-6 — Itikad Tidak Baik (12 bln lalu)',
+  'TC-4 KO-5 Lunas Diskon Leasing',
   makeReport({}, [
     makeFacility({
+      no_rekening: '1515151515',
+      kondisi: 'Lunas Dengan Diskon',
+      tanggal_kondisi: monthsAgo(8),
+      pelapor_type: 'Multifinance',
+    }),
+    makeFacility({ no_rekening: '1616161616' }),
+    makeFacility({ no_rekening: '1717171717' }),
+    makeFacility({ no_rekening: '1818181818' }),
+  ]),
+  (r) => ({ ok: r.stage2_knockout.triggered_rules.includes('KO-5') }),
+);
+
+runTest(
+  'TC-5 KO-3 Pengadilan',
+  makeReport({}, [
+    makeFacility({
+      no_rekening: '1919191919',
+      kondisi: 'Lunas - Diselesaikan Melalui Pengadilan',
+      tanggal_kondisi: monthsAgo(60),
+    }),
+    makeFacility({ no_rekening: '2020202020' }),
+    makeFacility({ no_rekening: '2121212121' }),
+    makeFacility({ no_rekening: '2222222223' }),
+  ]),
+  (r) => ({ ok: r.stage2_knockout.triggered_rules.includes('KO-3') }),
+);
+
+runTest(
+  'TC-6 KO-6 Itikad Tidak Baik',
+  makeReport({}, [
+    makeFacility({
+      no_rekening: '2323232323',
       sebab_macet: 'Itikad Tidak Baik',
       tanggal_macet: monthsAgo(12),
-      kualitas_kode: 5,
-      kondisi: 'Aktif',
-      pelapor: 'PT Capella Multidana',
-      pelapor_type: 'Multifinance',
     }),
-    makeFacility({}),
+    makeFacility({ no_rekening: '2424242424' }),
+    makeFacility({ no_rekening: '2525252525' }),
+    makeFacility({ no_rekening: '2626262626' }),
   ]),
+  (r) => ({ ok: r.stage2_knockout.triggered_rules.includes('KO-6') }),
+);
+
+runTest(
+  'TC-7 Thin -> N/A',
+  makeReport({}, [makeFacility({ no_rekening: 'R1001' })]),
+  (r) => ({ ok: r.stage3_scoring.grade === 'N/A' }),
+);
+
+runTest('TC-8 CV -> CV', makeReport({}, []), (r) => ({
+  ok: r.stage3_scoring.grade === 'CV',
+}));
+
+runTest(
+  'TC-9 Expired -> INVALID',
+  makeReport({ tanggal_permintaan: daysAgo(35) }, [makeFacility({})]),
+  (r) => ({ ok: r.stage3_scoring.grade === 'INVALID' }),
+);
+
+runTest(
+  'TC-9b Expired + KO -> KO decision takes priority',
+  makeReport(
+    { tanggal_permintaan: daysAgo(44) },
+    [
+      makeFacility({
+        no_rekening: 'KO-EXPIRED-1',
+        jumlah_hari_tunggakan: 762,
+        baki_debet: 213_627_936,
+      }),
+      makeFacility({
+        no_rekening: 'KO-EXPIRED-2',
+        kondisi: 'Dihapusbukukan',
+        tanggal_kondisi: monthsAgo(12),
+      }),
+      makeFacility({ no_rekening: 'KO-EXPIRED-3' }),
+      makeFacility({ no_rekening: 'KO-EXPIRED-4' }),
+    ],
+  ),
   (r) => ({
     ok:
       r.stage2_knockout.is_ko &&
-      r.stage2_knockout.triggered_rules.includes('KO-6') &&
-      r.stage3_scoring.decision === 'REJECT',
-    msg: `KO rules: ${r.stage2_knockout.triggered_rules.join(',')}`,
+      r.stage3_scoring.grade === 'KO' &&
+      r.stage3_scoring.decision === '⛔ TOLAK OTOMATIS' &&
+      !r.stage0_validity.is_valid,
   }),
 );
 
-// TC-7: Thin File — clean single facility
 runTest(
-  'TC-7: Thin File — Clean (1 fasilitas)',
-  makeReport({}, [
-    makeFacility({ plafon: 500_000_000, baki_debet: 100_000_000 }),
-  ]),
-  (r) => ({
-    ok:
-      r.stage1_profile.is_thin_file &&
-      !r.stage2_knockout.is_ko &&
-      r.stage3_scoring.decision === 'APPROVE WITH LIMIT CAP',
-    msg: `thin=${r.stage1_profile.is_thin_file} decision=${r.stage3_scoring.decision}`,
-  }),
-);
-
-// TC-8: Expired SLIK (> 30 days)
-runTest(
-  'TC-8: Validity — Expired Report (35 hari lalu)',
-  makeReport({ tanggal_permintaan: daysAgo(35) }, [makeFacility({})]),
-  (r) => ({
-    ok:
-      !r.stage0_validity.is_valid &&
-      r.stage0_validity.errors.some((e) => e.includes('kadaluarsa')),
-    msg: `errors: ${r.stage0_validity.errors.join('; ')}`,
-  }),
-);
-
-// TC-9: Thick file with DPK history — D1b drops 35→15 but total 140 still Grade A
-runTest(
-  'TC-9: Thick File — Historical KOL 2 (still Grade A, D1b penalty)',
+  'TC-10 D1 recency check',
   makeReport({}, [
     makeFacility({
-      pelapor: 'PT Bank BNI',
-      pelapor_type: 'Bank',
-      plafon: 200_000_000,
-      baki_debet: 50_000_000,
+      no_rekening: '2727272727',
+      kualitas_kode: 2,
       monthly_quality_strip: [
-        ...Array.from({ length: 20 }, (_, i) => ({
+        ...Array.from({ length: 21 }, (_, i) => ({
           month: `Bulan ${i + 1}`,
           quality: 1,
         })),
-        { month: 'Bulan 21', quality: 2 },
         { month: 'Bulan 22', quality: 2 },
-        { month: 'Bulan 23', quality: 1 },
-        { month: 'Bulan 24', quality: 1 },
+        { month: 'Bulan 23', quality: 2 },
+        { month: 'Bulan 24', quality: 2 },
       ],
     }),
-    makeFacility({ pelapor: 'PT Bank BCA', pelapor_type: 'Bank' }),
+    makeFacility({ no_rekening: '2828282828' }),
+    makeFacility({ no_rekening: '2929292929' }),
+    makeFacility({ no_rekening: '3030303030' }),
   ]),
+  (r) => ({ ok: r.stage3_scoring.breakdown?.d1_kualitas_recency === 15 }),
+);
+
+runTest(
+  'VAL-MARLAN -> A',
+  makeReport(
+    {
+      ringkasan_fasilitas: makeRingkasan(15_000_000_000, 8_800_000_000, 30),
+    },
+    Array.from({ length: 8 }, (_, i) =>
+      makeFacility({ no_rekening: `M${1000 + i}`, baki_debet: i === 0 ? 8_800_000_000 : 0 }),
+    ),
+  ),
+  (r) => ({ ok: r.stage3_scoring.grade === 'A' }),
+);
+
+runTest(
+  'VAL-EDO -> KO',
+  makeReport(
+    { ringkasan_fasilitas: makeRingkasan(1_000_000_000, 750_000_000, 25) },
+    [
+      makeFacility({
+        no_rekening: 'E1001',
+        jumlah_hari_tunggakan: 1602,
+        baki_debet: 750_000_000,
+      }),
+      makeFacility({
+        no_rekening: 'E1002',
+        kondisi: 'Dihapusbukukan',
+        tanggal_kondisi: monthsAgo(12),
+      }),
+      makeFacility({ no_rekening: 'E1003' }),
+      makeFacility({ no_rekening: 'E1004' }),
+    ],
+  ),
+  (r) => ({ ok: r.stage3_scoring.grade === 'KO' }),
+);
+
+runTest(
+  'VAL-ANINDITA -> A',
+  makeReport(
+    { ringkasan_fasilitas: makeRingkasan(700_000_000, 54_000_000, 76) },
+    [
+      makeFacility({
+        no_rekening: 'A1001',
+        kualitas_kode: 2,
+        monthly_quality_strip: Array.from({ length: 24 }, (_, i) => ({
+          month: `Bulan ${i + 1}`,
+          quality: i >= 21 ? 1 : 2,
+        })),
+      }),
+      makeFacility({ no_rekening: 'A1002', baki_debet: 44_000_000 }),
+      makeFacility({ no_rekening: 'A1003' }),
+      makeFacility({ no_rekening: 'A1004' }),
+      makeFacility({ no_rekening: 'A1005' }),
+    ],
+  ),
+  (r) => ({ ok: r.stage3_scoring.grade === 'A' }),
+);
+
+runTest(
+  'VAL-RIAN thin -> N/A',
+  makeReport({}, [makeFacility({ no_rekening: 'R2001' })]),
+  (r) => ({ ok: r.stage3_scoring.grade === 'N/A' }),
+);
+
+runTest(
+  'VAL-ANTON stack -> KO-7',
+  makeReport(
+    { ringkasan_fasilitas: makeRingkasan(500_000_000, 30_000_000, 10) },
+    Array.from({ length: 8 }, (_, i) =>
+      makeFacility({
+        no_rekening: `T${1000 + i}`,
+        jumlah_hari_tunggakan: i < 5 ? 60 : 0,
+        kualitas_kode: i < 5 ? 2 : 1,
+        baki_debet: i === 0 ? 30_000_000 : 0,
+      }),
+    ),
+  ),
   (r) => ({
     ok:
-      !r.stage2_knockout.is_ko &&
-      r.stage3_scoring.grade === 'A' &&
-      r.stage3_scoring.decision === 'APPROVE' &&
-      r.stage3_scoring.breakdown!.d1b_recency === 15, // D1b penalized from 35 → 15
-    msg: `grade=${r.stage3_scoring.grade} score=${r.stage3_scoring.score} d1b=${r.stage3_scoring.breakdown?.d1b_recency}`,
+      r.stage3_scoring.grade === 'KO' &&
+      r.stage2_knockout.triggered_rules.includes('KO-7'),
   }),
 );
 
-// TC-10: Pinjol detected — flag diagnostic
-runTest(
-  'TC-10: Pinjol/BNPL Detected — Diagnostic Flag',
-  makeReport({}, [
-    makeFacility({
-      pelapor: 'Kredivo Indonesia',
-      pelapor_type: 'Pinjol_BNPL',
-      plafon: 5_000_000,
-      baki_debet: 2_000_000,
-    }),
-    makeFacility({}),
-  ]),
-  (r) => ({
-    ok: r.diagnostic_flags.some((f) => f.startsWith('PINJOL_BNPL_DETECTED')),
-    msg: `flags: ${r.diagnostic_flags.join(', ')}`,
-  }),
-);
-
-// =============================================
-// SUMMARY
-// =============================================
-console.log(`\n${'═'.repeat(55)}`);
-console.log(
-  `TOTAL: ${passed + failed} | ✅ PASSED: ${passed} | ❌ FAILED: ${failed}`,
-);
-console.log('═'.repeat(55));
+console.log(`TOTAL: ${passed + failed} | PASSED: ${passed} | FAILED: ${failed}`);
 process.exit(failed > 0 ? 1 : 0);

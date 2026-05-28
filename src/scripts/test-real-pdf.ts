@@ -36,7 +36,7 @@ for (const d of parsed.debitur_pokok) {
   console.log(`  NIK        : ${d.nik}`);
   console.log(`  TTL        : ${d.tempat_lahir}, ${d.tanggal_lahir?.toLocaleDateString('id-ID') ?? '-'}`);
   console.log(`  Pekerjaan  : ${d.pekerjaan} — ${d.tempat_bekerja}`);
-  console.log(`  Alamat     : ${d.alamat}, ${d.kelurahan}, ${d.kecamatan}, ${d.kabupaten_kota} ${d.kode_pos}`);
+  console.log(`  Alamat     : ${d.alamat}`);
   console.log('  ---');
 }
 
@@ -64,6 +64,9 @@ for (let i = 0; i < parsed.facilities.length; i++) {
   console.log(`  Kualitas            : ${f.kualitas_label} (KOL ${f.kualitas_kode})`);
   console.log(`  Kondisi             : ${f.kondisi}${f.tanggal_kondisi ? ` per ${f.tanggal_kondisi.toLocaleDateString('id-ID')}` : ''}`);
   console.log(`  Hari Tunggakan      : ${f.jumlah_hari_tunggakan} DPD`);
+  console.log(`  Tanggal Akad Awal   : ${f.tanggal_akad_awal?.toLocaleDateString('id-ID') ?? '-'}`);
+  console.log(`  Tanggal Akad Akhir  : ${f.tanggal_akad_akhir?.toLocaleDateString('id-ID') ?? '-'}`);
+  console.log(`  Tanggal Mulai       : ${f.tanggal_mulai?.toLocaleDateString('id-ID') ?? '-'}`);
   console.log(`  Tanggal Awal Kredit : ${f.tanggal_awal_kredit?.toLocaleDateString('id-ID') ?? '-'}`);
   console.log(`  Tanggal Jatuh Tempo : ${f.tanggal_jatuh_tempo?.toLocaleDateString('id-ID') ?? '-'}`);
   console.log(`  Sifat Kredit        : ${f.sifat_kredit}`);
@@ -87,10 +90,9 @@ if (scoring.stage0_validity.errors.length) {
   for (const e of scoring.stage0_validity.errors) console.log(`  ⚠ ${e}`);
 }
 console.log(`\n  [Stage 1 – Profile]`);
-console.log(`  Thin File         : ${scoring.stage1_profile.is_thin_file ? 'YES' : 'NO'}`);
+console.log(`  File Type         : ${scoring.stage1_profile.file_type}`);
 console.log(`  Reason            : ${scoring.stage1_profile.reason}`);
 console.log(`  Total Facilities  : ${scoring.stage1_profile.total_facilities}`);
-console.log(`  History           : ${scoring.stage1_profile.history_months} bulan`);
 console.log(`\n  [Stage 2 – Knock-Out]`);
 if (scoring.stage2_knockout.is_ko) {
   console.log(`  ⛔ KO TRIGGERED: ${scoring.stage2_knockout.triggered_rules.join(', ')}`);
@@ -103,19 +105,23 @@ if (scoring.stage2_knockout.is_ko) {
 console.log(`\n  [Stage 3 – Scorecard]`);
 console.log(`  Score             : ${scoring.stage3_scoring.score}`);
 console.log(`  Grade             : ${scoring.stage3_scoring.grade}`);
+console.log(`  Risk Level        : ${scoring.stage3_scoring.risk_level}`);
 console.log(`  Decision          : ${scoring.stage3_scoring.decision}`);
+console.log(`  Notes             : ${scoring.stage3_scoring.notes}`);
 if (scoring.stage3_scoring.breakdown) {
   const b = scoring.stage3_scoring.breakdown;
   console.log(`  Breakdown         :`);
-  console.log(`    Base Score   : ${b.baseScore}`);
-  console.log(`    D1b Recency  : ${b.d1b_recency}`);
-  console.log(`    D2 Severity  : ${b.d2_severity}`);
-  console.log(`    D3a RestruFq : ${b.d3a_restruFreq}`);
-  console.log(`    D3b Restruct : ${b.d3b_restruStatus}`);
-  console.log(`    D4 CreditAge : ${b.d4_creditAge}`);
-  console.log(`    D5b DebtLoad : ${b.d5b_debtBurden}`);
+  console.log(`    D1 Kualitas  : ${b.d1_kualitas_recency}`);
+  console.log(`    D2 DPD       : ${b.d2_dpd_current}`);
+  console.log(`    D3 Restruk   : ${b.d3_restruk}`);
+  console.log(`    D4 Konkuren  : ${b.d4_concurrent_dpd30}`);
+  console.log(`    D5a Aktif    : ${b.d5a_active_count}`);
+  console.log(`    D5b BD Juta  : ${b.d5b_total_baki_juta}`);
 }
 console.log(`\n  [Diagnostics]`);
 console.log(`  Flags             : ${scoring.diagnostic_flags.join(', ') || 'none'}`);
 console.log(`  Pelapor Breakdown : Bank=${scoring.pelapor_breakdown.bank} Multifinance=${scoring.pelapor_breakdown.multifinance} Pinjol/BNPL=${scoring.pelapor_breakdown.pinjol_bnpl} Lainnya=${scoring.pelapor_breakdown.lainnya}`);
+console.log(`  DG1 Worst Slip    : ${scoring.diagnostic_info.dg1_pelapor_slip_terburuk}`);
+console.log(`  Total BD (jt)     : ${scoring.diagnostic_info.total_baki_debet_juta}`);
+console.log(`  Baki Flag         : ${scoring.diagnostic_info.baki_flag}`);
 console.log(`\n${'═'.repeat(60)}`);

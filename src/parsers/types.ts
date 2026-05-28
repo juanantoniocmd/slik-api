@@ -27,6 +27,9 @@ export interface SLIKFacility {
   suku_bunga: number;
   jenis_suku_bunga: string;
   kategori_debitur: string;
+  tanggal_akad_awal?: Date | null;
+  tanggal_akad_akhir?: Date | null;
+  tanggal_mulai?: Date | null;
   tanggal_awal_kredit: Date | null;
   tanggal_jatuh_tempo: Date | null;
   sektor_ekonomi: string;
@@ -58,11 +61,6 @@ export interface SLIKDebiturPokok {
   tempat_bekerja: string;
   bidang_usaha: string;
   alamat: string;
-  kelurahan: string;
-  kecamatan: string;
-  kabupaten_kota: string;
-  kode_pos: string;
-  negara: string;
 }
 
 export interface SLIKAgunan {

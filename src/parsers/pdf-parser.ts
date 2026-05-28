@@ -101,6 +101,32 @@ function extractRegex(text: string, pattern: RegExp): string | null {
   return typeof m[1] === 'string' ? m[1].trim() : null;
 }
 
+function extractDateAroundLabel(
+  page: string,
+  labelPattern: RegExp,
+): Date | null {
+  const datePattern =
+    '(\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4}|\\d{4}[./\\-]\\d{1,2}[./\\-]\\d{1,2}|\\d{1,2}[./\\-]\\d{1,2}[./\\-]\\d{2,4})';
+
+  // Prioritas: tanggal muncul setelah label (format yang paling umum di SLIK OCR).
+  const afterLabel = page.match(
+    new RegExp(`${labelPattern.source}[\\s:./\\-]{0,25}${datePattern}`, 'i'),
+  );
+  if (afterLabel?.[1]) {
+    return parseIndonesianDate(afterLabel[1]);
+  }
+
+  // Fallback: tanggal muncul sebelum label (kadang urutan token OCR terbalik).
+  const beforeLabel = page.match(
+    new RegExp(`${datePattern}[\\s:./\\-]{0,25}${labelPattern.source}`, 'i'),
+  );
+  if (beforeLabel?.[1]) {
+    return parseIndonesianDate(beforeLabel[1]);
+  }
+
+  return null;
+}
+
 function normalizeText(text: string): string {
   return text.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -110,6 +136,151 @@ function cleanToken(raw: string | null | undefined, maxLen = 120): string {
   const cleaned = raw.replace(/\s+/g, ' ').trim();
   if (!cleaned) return '';
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen).trim() : cleaned;
+}
+
+function normalizePelaporName(raw: string): string {
+  let value = cleanToken(raw, 120)
+    .replace(/^\d{3,6}\s*-\s*/i, '')
+    .replace(/^(?:KC|KCP|KK|KP|KCU|KCS|Kantor(?:\s+\w+)?)\s*-\s*/i, '')
+    .replace(/^PT\.?\s*-\s*PT\b/i, 'PT')
+    .replace(/\s+-\s*$/, '')
+    .trim();
+
+  if (!value) return '';
+
+  const tokens = value.split(' ').filter(Boolean);
+  const deduped: string[] = [];
+  for (const token of tokens) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && prev.toLowerCase() === token.toLowerCase()) continue;
+    deduped.push(token);
+  }
+  value = deduped.join(' ').trim();
+
+  // Beberapa OCR memberi bentuk "PT - X", sederhanakan jadi "PT X".
+  value = value
+    .replace(/^PT\s*-\s*/i, 'PT ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (value.startsWith('-')) {
+    value.replace('-', '');
+  }
+  return value;
+}
+
+// Kata kunci PDF yang BUKAN merupakan nilai nama cabang.
+const CABANG_NOISE_PATTERN =
+  /^(?:Baki\s+Debet|Tanggal\s+Update|Kualitas|Pelapor|Cabang|Kredit\/Pembiayaan|No\s+Rekening|Sifat|Jenis|Akad|Plafon|Kondisi|Valuta|Frekuensi|Tunggakan|Denda|Suku|Kategori|Sektor)\b/i;
+
+function sanitizeCabang(value: string): string {
+  const v = cleanToken(value, 120);
+  if (!v || CABANG_NOISE_PATTERN.test(v)) return '';
+  return v;
+}
+
+function extractCabangFromRawLines(rawPage: string): string {
+  const lines = rawPage
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const inline = line.match(/^Cabang\s*[:\-]?\s*(.+)$/i);
+    if (inline && inline[1]) {
+      const value = sanitizeCabang(inline[1]);
+      if (value) return value;
+    }
+    // When "Cabang" is a standalone header line, skip column-header noise lines
+    // and look for the first non-noise, non-amount, non-date line.
+    if (/^Cabang$/i.test(line)) {
+      for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+        const candidate = lines[j];
+        if (
+          candidate &&
+          !CABANG_NOISE_PATTERN.test(candidate) &&
+          !/^Rp\b/i.test(candidate) &&
+          !/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agt|Sep|Okt|Nov|Des)/i.test(
+            candidate,
+          ) &&
+          !/^\d{3,6}\s*[-–]/i.test(candidate)
+        ) {
+          const value = sanitizeCabang(candidate);
+          if (value) return value;
+          break;
+        }
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Ekstrak cabang dari teks header yang ternormalisasi menggunakan nama pelapor
+ * sebagai jangkar. Cabang = teks antara nama pelapor dan "Rp <angka>".
+ */
+function extractCabangByPelapor(headerSlice: string, pelapor: string): string {
+  if (!pelapor || !headerSlice) return '';
+  const escaped = pelapor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = headerSlice.match(
+    new RegExp(escaped + '\\s+(.+?)\\s+Rp\\s+[\\d.,]', 'i'),
+  );
+  if (!m || !m[1]) return '';
+  return sanitizeCabang(m[1]);
+}
+
+function normalizeKondisi(rawKondisi: string, page: string): string {
+  const raw = cleanToken(rawKondisi, 120);
+  const source = `${raw} ${page}`.toLowerCase();
+  const compact = source
+    .replace(/[^a-z]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Prioritas kondisi negatif/khusus agar tidak tertimpa keyword umum.
+  if (
+    compact.includes('lunas dengan diskon') ||
+    /\blunas\b(?:\s+\w+){0,4}\sdiskon\b/.test(compact)
+  ) {
+    return 'Lunas Dengan Diskon';
+  }
+  if (
+    compact.includes('dihapusbukukan') ||
+    compact.includes('hapus bukukan') ||
+    /\bhapus\b(?:\s+\w+){0,3}\sbuku(?:kan)?\b/.test(compact)
+  ) {
+    return 'Dihapusbukukan';
+  }
+  if (
+    compact.includes('hapus tagih') ||
+    /\bhapus\b(?:\s+\w+){0,4}\stagih\b/.test(compact)
+  ) {
+    return 'Hapus Tagih';
+  }
+  if (source.includes('pengambilalihan') && source.includes('agunan')) {
+    return 'Lunas karena Pengambilalihan Agunan';
+  }
+  if (source.includes('pengadilan')) {
+    return 'Lunas karena Putusan Pengadilan';
+  }
+  if (source.includes('dialihkan') && source.includes('pelapor lain')) {
+    return 'Dialihkan ke Pelapor Lain';
+  }
+  if (source.includes('dialihkan') && source.includes('fasilitas lain')) {
+    return 'Dialihkan ke Fasilitas Lain';
+  }
+  if (source.includes('dibatalkan')) {
+    return 'Dibatalkan';
+  }
+  if (source.includes('lunas')) {
+    return 'Lunas';
+  }
+  if (source.includes('aktif')) {
+    return 'Aktif';
+  }
+
+  return raw || 'Aktif';
 }
 
 function normalizeAlphaNum(raw: string | null | undefined): string {
@@ -582,53 +753,6 @@ function parseDebiturPokok(
   else if (lowerJob.includes('jasa')) bidang_usaha = 'Jasa';
   else if (lowerJob.includes('pertanian')) bidang_usaha = 'Pertanian';
 
-  const kode_pos = extractRegex(alamat, /\b(\d{5})\b/) || '';
-  let kelurahan = /\bSAMPALI\b/i.test(alamat)
-    ? 'SAMPALI'
-    : cleanToken(
-        extractRegex(alamat, /^([A-Za-z\s]{3,30})\s+(?:Kec\.?|Kab\.?|\d{5})/i),
-        30,
-      );
-  if (!kelurahan) {
-    kelurahan = cleanToken(extractRegex(alamat, /^([A-Za-z]{3,20})\b/), 30);
-  }
-
-  let kecamatan = '';
-  if (/\bPERCUT\b/i.test(alamat) && /\bTUAN\b/i.test(alamat)) {
-    kecamatan = 'PERCUT SEI TUAN';
-  } else if (/\bPERCUT\b/i.test(alamat)) {
-    kecamatan = 'PERCUT';
-  } else if (/\bLIRIK\b/i.test(alamat)) {
-    kecamatan = 'LIRIK';
-  } else {
-    kecamatan = cleanToken(
-      extractRegex(alamat, /(?:Kec\.?|Kecamatan)\s*([A-Za-z\s]{3,40})/i),
-      40,
-    );
-  }
-
-  let kabupaten_kota =
-    /\bDeli\b/i.test(alamat) && /\bSerdang\b/i.test(alamat)
-      ? 'Deli Serdang'
-      : cleanToken(
-          extractRegex(
-            alamat,
-            /Kab\.?\s*(?:\d{5}\s+)?([A-Za-z\s]{3,40})(?:\s+Indonesia|$)/i,
-          ),
-          40,
-        );
-  if (
-    !kabupaten_kota &&
-    /\bIndragiri\b/i.test(alamat) &&
-    /\bHulu\b/i.test(alamat)
-  ) {
-    kabupaten_kota = 'Indragiri Hulu';
-  }
-  kabupaten_kota = kabupaten_kota
-    .replace(/\bIndonesia\b/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
   let npwp: string | null = extractRegex(normalized, /\b(\d{15})\b/);
   if (npwp === nik) npwp = null;
 
@@ -648,11 +772,6 @@ function parseDebiturPokok(
       tempat_bekerja,
       bidang_usaha,
       alamat,
-      kelurahan,
-      kecamatan,
-      kabupaten_kota,
-      kode_pos,
-      negara: 'Indonesia',
     },
   ];
 }
@@ -780,6 +899,7 @@ function parseFacilities(
   for (let i = 0; i < pageTexts.length; i++) {
     const rawPage = rawPageTexts[i] || pageTexts[i];
     const page = normalizeText(pageTexts[i]);
+    const pageDateSource = `${page} ${normalizeText(rawPage)}`.trim();
 
     if (!/^Kredit\/Pembiayaan\b/i.test(page)) {
       continue;
@@ -831,7 +951,20 @@ function parseFacilities(
       continue;
     }
 
+    const headerEnd = page.indexOf('Kualitas /');
+    const headerSlice =
+      headerEnd > 0 ? page.slice(0, headerEnd) : page.slice(0, 360);
+
+    const pelaporHeaderRaw = extractRegex(
+      headerSlice,
+      /Pelapor\s+(.+?)\s+Cabang\s+/i,
+    );
+
     let pelapor = pelaporByCode[kodePelapor] || '';
+    const pelaporHeader = normalizePelaporName(pelaporHeaderRaw || '');
+    if (pelaporHeader) {
+      pelapor = pelaporHeader;
+    }
     if (!pelapor && /Federal\s+International/i.test(page)) {
       pelapor = 'PT Federal International Finance';
     } else if (!pelapor && /Astra\s+Multi/i.test(page)) {
@@ -871,19 +1004,20 @@ function parseFacilities(
         )
         .replace(/\s+-\s*$/, '')
         .trim();
+      pelapor = normalizePelaporName(pelapor);
     }
 
     if (!pelapor) {
       continue;
     }
 
-    const headerEnd = page.indexOf('Kualitas /');
-    const headerSlice =
-      headerEnd > 0 ? page.slice(0, headerEnd) : page.slice(0, 360);
-
-    let cabang = '';
-    if (/TEMBUNG/i.test(headerSlice)) cabang = 'KC TEMBUNG';
-    else if (/KC\s*-\s*PT\s+Medan/i.test(headerSlice)) cabang = 'KC MEDAN';
+    let cabang =
+      extractCabangByPelapor(headerSlice, pelapor) ||
+      extractCabangFromRawLines(rawPage);
+    if (!cabang) {
+      if (/TEMBUNG/i.test(headerSlice)) cabang = 'KC TEMBUNG';
+      else if (/KC\s*-\s*PT\s+Medan/i.test(headerSlice)) cabang = 'KC MEDAN';
+    }
 
     const bakiDebetRaw =
       extractRegex(headerSlice, /Rp\s*([\d.,]+)/i) ||
@@ -986,13 +1120,19 @@ function parseFacilities(
       sektorEkonomi = 'Perdagangan Sepeda Motor';
     }
 
-    let kondisi = cleanToken(
-      extractRegex(page, /Kondisi\s+(.+?)\s+Valuta/i),
-      80,
-    );
-    const kondisiProyek = kondisi.match(/Proyek\s+Lunas(?:\s+[A-Za-z]+)?/i);
-    if (kondisiProyek) kondisi = cleanToken(kondisiProyek[0], 40);
-    if (!kondisi) kondisi = 'Aktif';
+    const kondisiRaw =
+      extractRegex(
+        page,
+        /Kondisi\s+([\s\S]{1,100}?)(?=\s+(?:Tanggal|Valuta|Jumlah\s+\d+\s+Hari\s+Tunggakan|Frekuensi|Tunggakan|Sebab|Suku|Kategori|Sektor)\b)/i,
+      ) ||
+      extractRegex(page, /Kondisi\s+(.+?)\s+Tanggal/i) ||
+      extractRegex(page, /Kondisi\s+(.+?)\s+Valuta/i) ||
+      extractRegex(
+        page,
+        /Kondisi\s+(.+?)\s+Jumlah\s+\d+\s+Hari\s+Tunggakan/i,
+      ) ||
+      '';
+    const kondisi = normalizeKondisi(kondisiRaw, page);
 
     const tglKondisiMatch = page.match(
       /Tanggal\s+(\d{1,2})\s+Kondisi\s+([A-Za-z]+)\s+(\d{4})/i,
@@ -1003,23 +1143,28 @@ function parseFacilities(
         )
       : null;
 
-    const tglAwalMatch = page.match(
-      /Tanggal\s+(\d{1,2})\s+Awal\s+([A-Za-z]+)[\s\S]{0,50}?(\d{4})/i,
+    const tanggalAkadAwal = extractDateAroundLabel(
+      pageDateSource,
+      /Tanggal\s+Akad\s+Awal/,
     );
-    const tanggalAwalKredit = tglAwalMatch
-      ? parseIndonesianDate(
-          `${tglAwalMatch[1]} ${tglAwalMatch[2]} ${tglAwalMatch[3]}`,
-        )
-      : null;
-
-    const tglJatuhTempoMatch = page.match(
-      /Tanggal\s+(\d{1,2})\s+([A-Za-z]+)\s+Jatuh[\s\S]{0,60}?(\d{4})\s+Tunggakan/i,
+    const tanggalAkadAkhir = extractDateAroundLabel(
+      pageDateSource,
+      /Tanggal\s+Akad\s+Akhir/,
     );
-    const tanggalJatuhTempo = tglJatuhTempoMatch
-      ? parseIndonesianDate(
-          `${tglJatuhTempoMatch[1]} ${tglJatuhTempoMatch[2]} ${tglJatuhTempoMatch[3]}`,
-        )
-      : null;
+    const extractedTanggalMulai = extractDateAroundLabel(
+      pageDateSource,
+      /Tanggal\s+Mulai/,
+    );
+    const extractedTanggalAwalKredit = extractDateAroundLabel(
+      pageDateSource,
+      /Tanggal\s+Awal(?:\s+Kredit(?:\/Pembiayaan)?)?/,
+    );
+    const tanggalMulai = extractedTanggalMulai || extractedTanggalAwalKredit;
+    const tanggalAwalKredit = extractedTanggalAwalKredit || tanggalMulai;
+    const tanggalJatuhTempo = extractDateAroundLabel(
+      pageDateSource,
+      /Tanggal\s+Jatuh\s+Tempo/,
+    );
 
     const tunggakanPokokRaw =
       extractRegex(
@@ -1085,6 +1230,9 @@ function parseFacilities(
       suku_bunga: isNaN(sukuBunga) ? 0 : sukuBunga,
       jenis_suku_bunga: jenisSukuBunga,
       kategori_debitur: kategoriDebitur,
+      tanggal_akad_awal: tanggalAkadAwal,
+      tanggal_akad_akhir: tanggalAkadAkhir,
+      tanggal_mulai: tanggalMulai,
       tanggal_awal_kredit: tanggalAwalKredit,
       tanggal_jatuh_tempo: tanggalJatuhTempo,
       sektor_ekonomi: sektorEkonomi,

@@ -5,13 +5,12 @@ import type { ParsedSLIK, SLIKFacility } from '../parsers/types';
 // =============================================
 
 export interface ScorecardBreakdown {
-  baseScore: number;
-  d1b_recency: number;
-  d2_severity: number;
-  d3a_restruFreq: number;
-  d3b_restruStatus: number;
-  d4_creditAge: number;
-  d5b_debtBurden: number;
+  d1_kualitas_recency: number;
+  d2_dpd_current: number;
+  d3_restruk: number;
+  d4_concurrent_dpd30: number;
+  d5a_active_count: number;
+  d5b_total_baki_juta: number;
 }
 
 export interface CreditScoringResult {
@@ -22,9 +21,8 @@ export interface CreditScoringResult {
     errors: string[];
   };
   stage1_profile: {
-    is_thin_file: boolean;
+    file_type: 'CV' | 'THIN' | 'NORMAL';
     reason: string;
-    history_months: number;
     total_facilities: number;
   };
   stage2_knockout: {
@@ -33,13 +31,11 @@ export interface CreditScoringResult {
     details: Record<string, string>;
   };
   stage3_scoring: {
-    score: number;
-    grade: 'A' | 'B' | 'C' | 'D';
-    decision:
-      | 'APPROVE'
-      | 'APPROVE WITH LIMIT CAP'
-      | 'REFER / MANUAL REVIEW'
-      | 'REJECT';
+    score: number | null;
+    grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'KO' | 'N/A' | 'CV' | 'INVALID';
+    risk_level: string;
+    decision: string;
+    notes: string;
     breakdown?: ScorecardBreakdown;
   };
   diagnostic_flags: string[];
@@ -48,6 +44,11 @@ export interface CreditScoringResult {
     multifinance: number;
     pinjol_bnpl: number;
     lainnya: number;
+  };
+  diagnostic_info: {
+    dg1_pelapor_slip_terburuk: 'Bank' | 'Multifinance' | 'Pinjol_BNPL' | 'NA';
+    total_baki_debet_juta: number;
+    baki_flag: string;
   };
 }
 
@@ -73,6 +74,16 @@ function isConditionWithinMonths(
 
 function hasText(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isExplicitPengadilanCondition(kondisi: string): boolean {
+  const k = (kondisi || '').toLowerCase().trim();
+  if (!k) return false;
+  // KO-3 hanya untuk kondisi pengadilan yang eksplisit pada status fasilitas,
+  // bukan sekadar token "pengadilan" yang bisa muncul akibat noise OCR.
+  return /diselesaikan\s+melalui\s+pengadilan|lunas\s*-\s*diselesaikan\s*melalui\s+pengadilan/.test(
+    k,
+  );
 }
 
 function normalizeAlphaNum(value: string | null | undefined): string {
@@ -169,13 +180,9 @@ function validateOjkCoreCompliance(report: ParsedSLIK): {
     flags.push('OJK_D01_ALAMAT_MISSING');
   }
 
-  if (!hasText(debtor.kelurahan)) flags.push('OJK_D01_KELURAHAN_MISSING');
-  if (!hasText(debtor.kecamatan)) flags.push('OJK_D01_KECAMATAN_MISSING');
-  if (!hasText(debtor.kabupaten_kota)) flags.push('OJK_D01_KABKOTA_MISSING');
-
-  if (!/^\d{5}$/.test((debtor.kode_pos || '').trim())) {
-    errors.push('Kepatuhan OJK D01 gagal: kode pos wajib 5 digit');
-    flags.push('OJK_D01_KODEPOS_INVALID');
+  // Detail wilayah kini disatukan dalam satu field alamat.
+  if (!/\b\d{5}\b/.test(debtor.alamat || '')) {
+    flags.push('OJK_D01_KODEPOS_NOT_DETECTED_IN_ALAMAT');
   }
 
   if (!hasText(debtor.pekerjaan)) {
@@ -183,10 +190,10 @@ function validateOjkCoreCompliance(report: ParsedSLIK): {
     flags.push('OJK_D01_PEKERJAAN_MISSING');
   }
 
-  if (!hasText(debtor.tempat_bekerja)) {
-    // Sesuai pedoman, jika tidak ada tempat bekerja seharusnya diisi "NA".
-    flags.push('OJK_D01_TEMPATKERJA_EMPTY_SHOULD_NA');
-  }
+  // if (!hasText(debtor.tempat_bekerja)) {
+  // Sesuai pedoman, jika tidak ada tempat bekerja seharusnya diisi "NA".
+  // flags.push('OJK_D01_TEMPATKERJA_EMPTY_SHOULD_NA');
+  // }
 
   const facilities = report.facilities || [];
   if (facilities.length === 0) {
@@ -346,22 +353,22 @@ function validateOjkCoreCompliance(report: ParsedSLIK): {
     }
   }
 
-  const total = facilities.length;
-  const noRekMissingRatio = invalidNoRekening / total;
+  // const total = facilities.length;
+  // const noRekMissingRatio = invalidNoRekening / total;
 
   // Nomor rekening adalah mandatory F01; invalid jika mayoritas kosong atau seluruhnya kosong.
   // Untuk sampel kecil, jangan langsung invalid agar tidak false reject akibat 1 OCR miss.
-  const severeNoRekGap =
-    invalidNoRekening === total || (total >= 5 && noRekMissingRatio >= 0.5);
+  // const severeNoRekGap =
+  //   invalidNoRekening === total || (total >= 5 && noRekMissingRatio >= 0.5);
 
-  if (severeNoRekGap) {
-    errors.push(
-      `Kepatuhan OJK F01 gagal: nomor rekening kosong pada ${invalidNoRekening}/${total} fasilitas`,
-    );
-    flags.push('OJK_F01_NOREKENING_LOW_COMPLETENESS');
-  } else if (invalidNoRekening > 0) {
-    flags.push('OJK_F01_NOREKENING_PARTIAL_MISSING');
-  }
+  // if (severeNoRekGap) {
+  //   errors.push(
+  //     `Kepatuhan OJK F01 gagal: nomor rekening kosong pada ${invalidNoRekening}/${total} fasilitas`,
+  //   );
+  //   flags.push('OJK_F01_NOREKENING_LOW_COMPLETENESS');
+  // } else if (invalidNoRekening > 0) {
+  //   flags.push('OJK_F01_NOREKENING_PARTIAL_MISSING');
+  // }
 
   if (invalidKondisi > 0) {
     flags.push('OJK_F01_KONDISI_PARTIAL_MISSING');
@@ -688,6 +695,7 @@ function validateOjkCoreCompliance(report: ParsedSLIK): {
 
 export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
   const errors: string[] = [];
+  const validityErrors: string[] = [];
   const diagnosticFlags: string[] = [];
   const triggeredKOs: string[] = [];
   const koDetails: Record<string, string> = {};
@@ -717,10 +725,15 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
       (1000 * 60 * 60 * 24),
   );
   if (daysSinceReport > 30) {
-    errors.push(
+    validityErrors.push(
       `Laporan SLIK kadaluarsa (umur ${daysSinceReport} hari, maksimal 30 hari)`,
     );
     diagnosticFlags.push('VALIDITY_EXPIRED');
+  } else if (daysSinceReport < 0) {
+    validityErrors.push(
+      `Tanggal laporan SLIK di masa depan (${daysSinceReport} hari dari hari ini)`,
+    );
+    diagnosticFlags.push('VALIDITY_FUTURE_DATE');
   }
 
   // 0-2: Debtor data completeness
@@ -750,44 +763,33 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
   // 0-4: OJK compliance checks (core fields in D01/F01 that exist in parsed model)
   const ojkCompliance = validateOjkCoreCompliance(report);
   if (ojkCompliance.errors.length > 0) {
-    errors.push(...ojkCompliance.errors);
+    const filteredErrors = ojkCompliance.errors.filter((err) => {
+      if (report.facilities.length === 0 && err.includes('F01 gagal')) {
+        // Untuk skenario CV (0 fasilitas), model v4.1 tetap lanjut ke jalur CV.
+        return false;
+      }
+      return true;
+    });
+    errors.push(...filteredErrors);
   }
   if (ojkCompliance.flags.length > 0) {
     diagnosticFlags.push(...ojkCompliance.flags);
   }
 
-  const isValid = errors.length === 0;
+  const isValid = validityErrors.length === 0;
 
   // -------------------------------------------------------
   // STAGE 1: CV / THIN FILE DETERMINATION
   // -------------------------------------------------------
-  // Thin file = < 2 fasilitas OR riwayat kredit < 6 bulan
-
   const facilities = report.facilities;
-  let oldestCreditDate: Date | null = null;
-
-  for (const fac of facilities) {
-    const startDate = fac.tanggal_awal_kredit;
-    if (startDate && (!oldestCreditDate || startDate < oldestCreditDate)) {
-      oldestCreditDate = startDate;
-    }
-  }
-
-  const historyMonths = oldestCreditDate
-    ? getMonthDifference(oldestCreditDate, refDate)
-    : 0;
-
-  let isThinFile = false;
-  let thinReason = 'Kriteria thick file terpenuhi';
-
-  if (facilities.length < 2) {
-    isThinFile = true;
-    thinReason = `Jumlah fasilitas kurang dari 2 (total: ${facilities.length})`;
-    diagnosticFlags.push('THIN_FILE_FEW_FACILITIES');
-  } else if (historyMonths < 6) {
-    isThinFile = true;
-    thinReason = `Riwayat kredit kurang dari 6 bulan (${historyMonths} bulan)`;
-    diagnosticFlags.push('THIN_FILE_SHORT_HISTORY');
+  let fileType: CreditScoringResult['stage1_profile']['file_type'] = 'NORMAL';
+  let stage1Reason = 'Total fasilitas >= 4 (normal scoring)';
+  if (facilities.length === 0) {
+    fileType = 'CV';
+    stage1Reason = '0 fasilitas SLIK (Credit Virgin)';
+  } else if (facilities.length <= 3) {
+    fileType = 'THIN';
+    stage1Reason = 'Thin file (1-3 fasilitas), wajib survey';
   }
 
   // Pelapor breakdown for diagnostics
@@ -821,49 +823,114 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
     );
   }
 
+  const isActiveFacility = (fac: SLIKFacility): boolean => {
+    const kondisiLower = (fac.kondisi || '').toLowerCase();
+    return !(
+      kondisiLower.includes('lunas') ||
+      kondisiLower.includes('selesai') ||
+      kondisiLower.includes('dibatalkan') ||
+      kondisiLower.includes('dijual') ||
+      kondisiLower.includes('dialihkan') ||
+      kondisiLower.includes('disekuritisasi')
+    );
+  };
+
+  const isPinjolBnplOrCc = (fac: SLIKFacility): boolean => {
+    const kreditType = (fac.jenis_kredit || '').toLowerCase();
+    return (
+      fac.pelapor_type === 'Pinjol_BNPL' || kreditType.includes('kartu kredit')
+    );
+  };
+
+  // K1 smart filter: noise-out pinjol kecil.
+  const pinjolCcFacilities = facilities.filter(isPinjolBnplOrCc);
+  const totalPinjolCcBaki = pinjolCcFacilities.reduce(
+    (sum, fac) => sum + fac.baki_debet,
+    0,
+  );
+  const shouldNoiseOutPinjol =
+    totalPinjolCcBaki <= 5_000_000 && pinjolCcFacilities.length <= 2;
+  const qualifiedForK1 = facilities.filter((fac) => {
+    if (!isPinjolBnplOrCc(fac)) return true;
+    return !shouldNoiseOutPinjol;
+  });
+  if (shouldNoiseOutPinjol && pinjolCcFacilities.length > 0) {
+    diagnosticFlags.push('K1_SMART_FILTER_PINJOL_NOISE_OUT');
+  }
+
+  const activeFacilities = facilities.filter(isActiveFacility);
+  const qualifiedActiveFacilities = qualifiedForK1.filter(isActiveFacility);
+
+  const worstQualityActive = Math.max(
+    1,
+    ...qualifiedActiveFacilities.map((fac) => fac.kualitas_kode || 1),
+  );
+  const maxDpdCurrent = Math.max(
+    0,
+    ...qualifiedActiveFacilities.map((fac) => fac.jumlah_hari_tunggakan || 0),
+  );
+  const concurrentDpd30Count = activeFacilities.filter(
+    (fac) => (fac.jumlah_hari_tunggakan || 0) > 30,
+  ).length;
+
+  // D1b recency: apakah kualitas terburuk muncul pada 3 bulan terakhir.
+  let isWorstQualityRecent = false;
+  for (const fac of qualifiedActiveFacilities) {
+    const recentThree = fac.monthly_quality_strip.slice(-3);
+    if (recentThree.some((entry) => entry.quality === worstQualityActive)) {
+      isWorstQualityRecent = true;
+      break;
+    }
+  }
+
+  const maxRestrukFreq = Math.max(
+    0,
+    ...facilities.map((fac) => fac.frekuensi_restrukturisasi || 0),
+  );
+  const activeRestrukCount = activeFacilities.filter((fac) =>
+    (fac.sifat_kredit || '').toLowerCase().includes('restrukturisasi'),
+  ).length;
+  const restrukMetric = Math.max(maxRestrukFreq, activeRestrukCount);
+
   // -------------------------------------------------------
   // STAGE 2: KO (KNOCK-OUT) FAST-PATH
   // -------------------------------------------------------
 
   for (const fac of facilities) {
     const kondisiLower = (fac.kondisi || '').toLowerCase();
-    const isClosed =
-      kondisiLower.includes('lunas') || kondisiLower.includes('selesai');
-    const isRestructured =
-      (fac.sifat_kredit || '').toLowerCase().includes('restrukturisasi') ||
-      fac.frekuensi_restrukturisasi > 0;
+    const isQualifiedActive =
+      isActiveFacility(fac) && qualifiedForK1.some((q) => q === fac);
 
-    // KO-1: Current delinquency (KOL >= 3 atau DPD > 90 pada fasilitas aktif)
+    // KO-1: DPD>90 + BD>5jt (aktif, qualified K1).
     if (
-      !isClosed &&
-      (fac.kualitas_kode >= 3 || fac.jumlah_hari_tunggakan > 90)
+      isQualifiedActive &&
+      fac.jumlah_hari_tunggakan > 90 &&
+      fac.baki_debet > 5_000_000
     ) {
       triggeredKOs.push('KO-1');
       koDetails['KO-1'] =
-        `KOL ${fac.kualitas_kode} / DPD ${fac.jumlah_hari_tunggakan} hari pada ${fac.pelapor}`;
+        `DPD ${fac.jumlah_hari_tunggakan} + BD ${fac.baki_debet.toLocaleString('id-ID')} pada ${fac.pelapor}`;
     }
 
-    // KO-2: Fasilitas aktif yang sedang dalam status restrukturisasi
-    if (!isClosed && isRestructured) {
+    // KO-2: Dihapusbukukan <=36 bulan (hapus tagih tidak termasuk).
+    if (
+      kondisiLower.includes('dihapusbukukan') &&
+      isConditionWithinMonths(fac.tanggal_kondisi, refDate, 36)
+    ) {
       triggeredKOs.push('KO-2');
       koDetails['KO-2'] =
-        `Fasilitas aktif direstrukturisasi (${fac.frekuensi_restrukturisasi}x) pada ${fac.pelapor}`;
+        `Dihapusbukukan ${fac.tanggal_kondisi?.toLocaleDateString('id-ID')} di ${fac.pelapor}`;
     }
 
-    // KO-3: Lunas Dengan Diskon dalam 12 bulan terakhir
-    if (
-      kondisiLower.includes('diskon') &&
-      isConditionWithinMonths(fac.tanggal_kondisi, refDate, 12)
-    ) {
+    // KO-3: Pengadilan (auto KO, no window) - explicit condition only.
+    if (isExplicitPengadilanCondition(fac.kondisi || '')) {
       triggeredKOs.push('KO-3');
-      koDetails['KO-3'] =
-        `Lunas Dengan Diskon ${fac.tanggal_kondisi?.toLocaleDateString('id-ID')} di ${fac.pelapor}`;
+      koDetails['KO-3'] = `History pengadilan terdeteksi pada ${fac.pelapor}`;
     }
 
-    // KO-4: Dihapusbukukan / Hapus Tagih dalam 24 bulan terakhir
+    // KO-4: AYDA <=24 bulan.
     if (
-      (kondisiLower.includes('hapusbukukan') ||
-        kondisiLower.includes('hapus tagih')) &&
+      kondisiLower.includes('pengambilalihan agunan') &&
       isConditionWithinMonths(fac.tanggal_kondisi, refDate, 24)
     ) {
       triggeredKOs.push('KO-4');
@@ -871,10 +938,10 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
         `${fac.kondisi} per ${fac.tanggal_kondisi?.toLocaleDateString('id-ID')} di ${fac.pelapor}`;
     }
 
-    // KO-5: Lunas via pengadilan / pengambilalihan agunan dalam 24 bulan terakhir
+    // KO-5: Lunas Diskon LEASING <=24 bulan (multifinance only).
     if (
-      (kondisiLower.includes('pengadilan') ||
-        kondisiLower.includes('pengambilalihan agunan')) &&
+      kondisiLower.includes('diskon') &&
+      fac.pelapor_type === 'Multifinance' &&
       isConditionWithinMonths(fac.tanggal_kondisi, refDate, 24)
     ) {
       triggeredKOs.push('KO-5');
@@ -897,6 +964,13 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
     }
   }
 
+  // KO-7: >=4 fasilitas aktif DPD>30 konkuren.
+  if (concurrentDpd30Count >= 4) {
+    triggeredKOs.push('KO-7');
+    koDetails['KO-7'] =
+      `${concurrentDpd30Count} fasilitas aktif DPD>30 konkuren`;
+  }
+
   // Deduplicate triggered KOs
   const uniqueKOs = [...new Set(triggeredKOs)];
   const isKO = uniqueKOs.length > 0;
@@ -905,165 +979,179 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
   // STAGE 3: FULL SCORING (ADIRA v4.1)
   // -------------------------------------------------------
 
-  let score = 0;
-  let grade: 'A' | 'B' | 'C' | 'D' = 'D';
-  let decision: CreditScoringResult['stage3_scoring']['decision'] = 'REJECT';
+  let score: number | null = null;
+  let grade: CreditScoringResult['stage3_scoring']['grade'] = 'E';
+  let riskLevel = 'SANGAT TINGGI';
+  let decision = '❌ TOLAK';
+  let notes = 'Proceed ke verifikasi income, DSR, uang muka sesuai grade.';
   let breakdown: ScorecardBreakdown | undefined;
-
+  const totalBakiDebetJuta =
+    report.ringkasan_fasilitas.baki_debet_total / 1_000_000;
   if (isKO) {
-    score = 0;
-    grade = 'D';
-    decision = 'REJECT';
+    grade = 'KO';
+    riskLevel = 'KNOCKOUT';
+    decision = '⛔ TOLAK OTOMATIS';
+    notes = 'Lihat KO_Check. Catat KO# di dosir untuk audit.';
+    score = null;
     diagnosticFlags.push('KO_FAST_PATH_REJECTION');
-  } else if (isThinFile) {
-    // ---- THIN FILE SCORECARD ----
-    const baseScore = 50;
-
-    // D1b: Max active KOL
-    const maxActiveKol = facilities.reduce(
-      (m, f) => Math.max(m, f.kualitas_kode),
-      1,
-    );
-    const d1b_recency = maxActiveKol === 1 ? 30 : maxActiveKol === 2 ? 5 : -30;
-
-    // D2: Max DPD
-    const maxDpd = facilities.reduce(
-      (m, f) => Math.max(m, f.jumlah_hari_tunggakan),
-      0,
-    );
-    const d2_severity = maxDpd === 0 ? 20 : maxDpd <= 30 ? 5 : -25;
-
-    // D5b: Debt burden using ringkasan_fasilitas (pre-aggregated OJK figures)
-    const totalBaki = report.ringkasan_fasilitas.baki_debet_total;
-    const totalPlafon = report.ringkasan_fasilitas.plafon_efektif_total;
-    const debtRatio = totalPlafon > 0 ? totalBaki / totalPlafon : 0;
-    const d5b_debtBurden = totalBaki === 0 ? 15 : debtRatio <= 0.5 ? 10 : -10;
-
-    score = baseScore + d1b_recency + d2_severity + d5b_debtBurden;
-
-    if (score >= 90) {
-      grade = 'B';
-      decision = 'APPROVE WITH LIMIT CAP';
-    } else if (score >= 70) {
-      grade = 'C';
-      decision = 'REFER / MANUAL REVIEW';
-    } else {
-      grade = 'D';
-      decision = 'REJECT';
-    }
-
-    breakdown = {
-      baseScore,
-      d1b_recency,
-      d2_severity,
-      d3a_restruFreq: 0,
-      d3b_restruStatus: 0,
-      d4_creditAge: 0,
-      d5b_debtBurden,
-    };
+  } else if (!isValid) {
+    grade = 'INVALID';
+    riskLevel = 'INVALID SLIK';
+    decision = '📛 RE-REQUEST SLIK';
+    notes =
+      'Tanggal laporan SLIK tidak valid untuk scoring (harus <=30 hari dan tidak boleh masa depan). Re-request OJK sebelum lanjut.';
+    score = null;
+  } else if (fileType === 'CV') {
+    grade = 'CV';
+    riskLevel = 'CREDIT VIRGIN';
+    decision = '↪ ALIHKAN — JALUR NON-SLIK';
+    notes = 'Tidak ada riwayat SLIK. Jalur non-SLIK terpisah.';
+    score = null;
+  } else if (fileType === 'THIN') {
+    grade = 'N/A';
+    riskLevel = 'THIN FILE — WAJIB SURVEY';
+    decision = '🔍 SURVEY DEALER/CABANG WAJIB';
+    notes =
+      'Thin File 1-3 fasilitas — data SLIK tidak cukup. Wajib survey lapangan.';
+    score = null;
   } else {
-    // ---- THICK FILE FULL SCORECARD ----
-    const baseScore = 40;
+    const d1 =
+      worstQualityActive === 1
+        ? 30
+        : worstQualityActive === 2
+          ? isWorstQualityRecent
+            ? 15
+            : 22
+          : worstQualityActive === 3
+            ? isWorstQualityRecent
+              ? 4
+              : 10
+            : worstQualityActive === 4
+              ? 2
+              : 0;
+    const d2 =
+      maxDpdCurrent === 0
+        ? 25
+        : maxDpdCurrent <= 7
+          ? 22
+          : maxDpdCurrent <= 30
+            ? 16
+            : maxDpdCurrent <= 60
+              ? 8
+              : maxDpdCurrent <= 90
+                ? 3
+                : 0;
+    const d3 =
+      restrukMetric === 0
+        ? 10
+        : restrukMetric === 1
+          ? 7
+          : restrukMetric === 2
+            ? 3
+            : 0;
+    const d4 =
+      concurrentDpd30Count === 0
+        ? 20
+        : concurrentDpd30Count === 1
+          ? 13
+          : concurrentDpd30Count === 2
+            ? 6
+            : concurrentDpd30Count === 3
+              ? 2
+              : 0;
+    const d5a =
+      activeFacilities.length <= 2
+        ? 6
+        : activeFacilities.length <= 4
+          ? 5
+          : activeFacilities.length <= 6
+            ? 2
+            : 0;
+    const d5b =
+      totalBakiDebetJuta <= 50
+        ? 9
+        : totalBakiDebetJuta <= 150
+          ? 6
+          : totalBakiDebetJuta <= 300
+            ? 2
+            : 0;
 
-    // D1b: Worst historical KOL from monthly_quality_strip across ALL facilities
-    let maxHistoricalKol = 1;
-    for (const fac of facilities) {
-      let facilityMaxKol = Math.max(1, Math.min(5, fac.kualitas_kode || 1));
-
-      for (const entry of fac.monthly_quality_strip) {
-        const qRaw = Number(entry.quality);
-        if (!Number.isFinite(qRaw)) continue;
-        const q = Math.max(1, Math.min(5, Math.round(qRaw)));
-        if (q > facilityMaxKol) facilityMaxKol = q;
-      }
-
-      if (facilityMaxKol > maxHistoricalKol) maxHistoricalKol = facilityMaxKol;
-    }
-    const d1b_recency =
-      maxHistoricalKol === 1
-        ? 35
-        : maxHistoricalKol === 2
-          ? 15
-          : maxHistoricalKol === 3
-            ? -10
-            : -35;
-
-    // D2: Worst DPD ever recorded
-    const maxDpd = facilities.reduce(
-      (m, f) => Math.max(m, f.jumlah_hari_tunggakan),
-      0,
-    );
-    const d2_severity =
-      maxDpd === 0 ? 25 : maxDpd <= 30 ? 10 : maxDpd <= 90 ? -15 : -40;
-
-    // D3a: Total restructuring frequency
-    const totalRestruCount = facilities.reduce(
-      (s, f) => s + f.frekuensi_restrukturisasi,
-      0,
-    );
-    const d3a_restruFreq =
-      totalRestruCount === 0 ? 15 : totalRestruCount === 1 ? -5 : -25;
-
-    // D3b: Any facility ever restructured
-    const hasRestructured = facilities.some(
-      (f) =>
-        f.sifat_kredit.toLowerCase().includes('restrukturisasi') ||
-        f.frekuensi_restrukturisasi > 0,
-    );
-    const d3b_restruStatus = hasRestructured ? -20 : 10;
-
-    // D4: Age of oldest credit
-    const d4_creditAge = historyMonths > 36 ? 20 : historyMonths >= 12 ? 10 : 5;
-
-    // D5b: Debt burden using pre-aggregated OJK ringkasan (most accurate)
-    const totalBaki = report.ringkasan_fasilitas.baki_debet_total;
-    const totalPlafon = report.ringkasan_fasilitas.plafon_efektif_total;
-    const debtRatio = totalPlafon > 0 ? totalBaki / totalPlafon : 0;
-    const d5b_debtBurden =
-      totalBaki === 0 ? 20 : debtRatio <= 0.3 ? 15 : debtRatio <= 0.7 ? 5 : -15;
-
-    score =
-      baseScore +
-      d1b_recency +
-      d2_severity +
-      d3a_restruFreq +
-      d3b_restruStatus +
-      d4_creditAge +
-      d5b_debtBurden;
-
-    if (score >= 115) {
-      grade = 'A';
-      decision = 'APPROVE';
-    } else if (score >= 90) {
-      grade = 'B';
-      decision = 'APPROVE';
-    } else if (score >= 60) {
-      grade = 'C';
-      decision = 'REFER / MANUAL REVIEW';
-    } else {
-      grade = 'D';
-      decision = 'REJECT';
-    }
-
+    score = d1 + d2 + d3 + d4 + d5a + d5b;
     breakdown = {
-      baseScore,
-      d1b_recency,
-      d2_severity,
-      d3a_restruFreq,
-      d3b_restruStatus,
-      d4_creditAge,
-      d5b_debtBurden,
+      d1_kualitas_recency: d1,
+      d2_dpd_current: d2,
+      d3_restruk: d3,
+      d4_concurrent_dpd30: d4,
+      d5a_active_count: d5a,
+      d5b_total_baki_juta: d5b,
     };
+
+    if (score >= 80) {
+      grade = 'A';
+      riskLevel = 'RENDAH';
+      decision = '✅ SETUJUI';
+    } else if (score >= 65) {
+      grade = 'B';
+      riskLevel = 'SEDANG';
+      decision = '✅ SETUJUI DENGAN SYARAT';
+    } else if (score >= 50) {
+      grade = 'C';
+      riskLevel = 'MENINGKAT';
+      decision = '⚠ ESKALASI KOMITE CABANG';
+    } else if (score >= 35) {
+      grade = 'D';
+      riskLevel = 'TINGGI';
+      decision = '❌ TOLAK (override BM+ACH)';
+    } else {
+      grade = 'E';
+      riskLevel = 'SANGAT TINGGI';
+      decision = '❌ TOLAK';
+    }
+    if (totalBakiDebetJuta > 300) {
+      notes =
+        'Total exposure >Rp 300jt — overleveraged untuk segmen motor 20-45jt. DSR check ketat.';
+    }
   }
+
+  // DG1: pelapor slip terburuk (DPD>0 atau KOL>=2).
+  let dg1Pelapor: CreditScoringResult['diagnostic_info']['dg1_pelapor_slip_terburuk'] =
+    'NA';
+  let worstSlipScore = -1;
+  for (const fac of facilities) {
+    const hasSlip = fac.jumlah_hari_tunggakan > 0 || fac.kualitas_kode >= 2;
+    if (!hasSlip) continue;
+    const slipScore = fac.jumlah_hari_tunggakan * 10 + fac.kualitas_kode;
+    if (slipScore > worstSlipScore) {
+      worstSlipScore = slipScore;
+      if (
+        fac.pelapor_type === 'Bank' ||
+        fac.pelapor_type === 'Multifinance' ||
+        fac.pelapor_type === 'Pinjol_BNPL'
+      ) {
+        dg1Pelapor = fac.pelapor_type;
+      } else {
+        dg1Pelapor = 'NA';
+      }
+    }
+  }
+
+  const bakiFlag =
+    totalBakiDebetJuta > 300
+      ? '⚠ OVERLEVERAGED — DSR check ketat'
+      : totalBakiDebetJuta > 150
+        ? '⚠ Watch — verifikasi income tambahan'
+        : '✅ Within range';
 
   return {
     model_version: 'Adira v4.1',
     ref_date: refDate.toISOString().split('T')[0],
-    stage0_validity: { is_valid: isValid, errors },
+    stage0_validity: {
+      is_valid: isValid,
+      errors: [...validityErrors, ...errors],
+    },
     stage1_profile: {
-      is_thin_file: isThinFile,
-      reason: thinReason,
-      history_months: historyMonths,
+      file_type: fileType,
+      reason: stage1Reason,
       total_facilities: facilities.length,
     },
     stage2_knockout: {
@@ -1071,8 +1159,20 @@ export function scoreSlikReport(report: ParsedSLIK): CreditScoringResult {
       triggered_rules: uniqueKOs,
       details: koDetails,
     },
-    stage3_scoring: { score, grade, decision, breakdown },
+    stage3_scoring: {
+      score,
+      grade,
+      risk_level: riskLevel,
+      decision,
+      notes,
+      breakdown,
+    },
     diagnostic_flags: diagnosticFlags,
     pelapor_breakdown: pelaporBreakdown,
+    diagnostic_info: {
+      dg1_pelapor_slip_terburuk: dg1Pelapor,
+      total_baki_debet_juta: totalBakiDebetJuta,
+      baki_flag: bakiFlag,
+    },
   };
 }
